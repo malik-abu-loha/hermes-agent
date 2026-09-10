@@ -24,6 +24,7 @@ from agent.redact import redact_sensitive_text
 from cron.executions import _owner_is_live, _process_start_time
 from hermes_cli.sqlite_util import add_column_if_missing
 from hermes_constants import get_hermes_home
+from hermes_db import connect_database, is_postgres_connection
 from hermes_time import now as _hermes_now
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def _transaction() -> Iterator[sqlite3.Connection]:
     with _lock:
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path, timeout=5)
+        conn = connect_database(path, timeout=5)
         try:
             path.chmod(0o600)
         except OSError:
@@ -91,9 +92,10 @@ def _transaction() -> Iterator[sqlite3.Connection]:
         try:
             from hermes_state_wal import apply_wal_with_fallback
 
-            conn.execute("PRAGMA busy_timeout=5000")
-            apply_wal_with_fallback(conn, db_label="cron/deliveries.db")
-            conn.execute("PRAGMA synchronous=FULL")
+            if not is_postgres_connection(conn):
+                conn.execute("PRAGMA busy_timeout=5000")
+                apply_wal_with_fallback(conn, db_label="cron/deliveries.db")
+                conn.execute("PRAGMA synchronous=FULL")
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS deliveries (
                      execution_id TEXT PRIMARY KEY,

@@ -109,8 +109,15 @@ def _open_session_db_at_path(db_path: Path, *, read_only: bool):
     """
     import sqlite3
 
+    from hermes_db import settings_for_path
     from hermes_state import SessionDB, is_malformed_schema_error
     from hermes_state_registry import acquire, release_or_close
+
+    # PostgreSQL has no file to bootstrap, inspect, or heal.  A read-only
+    # handle deliberately skips migrations; writable startup owns schema
+    # reconciliation just as it does for the SQLite path below.
+    if settings_for_path(db_path).backend == "postgres":
+        return SessionDB(db_path=db_path, read_only=True) if read_only else acquire(db_path)
 
     # Read-only file/sidecar preflight (port of kilocode#12508): repair-or-refuse BEFORE the first
     # connection so users get an actionable message instead of an opaque "attempt to write a readonly

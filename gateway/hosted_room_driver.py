@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal, get_args
 from gateway.hosted_rooms_common import (
     DbPath, bounded_int, canonical_json, compact_json, connect, fenced_update, identifier, table_columns, text,
     transaction)
+from hermes_db import is_postgres_connection
 
 Clock = Callable[[], float]
 TaskStatus = Literal["queued", "running", "settled", "failed", "cancelled", "indeterminate", "deferred", "stopping"]
@@ -231,6 +232,8 @@ def _validate_schema(conn: sqlite3.Connection) -> None:
         raise DriverStateError(
             "unsupported unpublished hosted-room driver schema; "
             "recreate the driver tables before starting the driver")
+    if is_postgres_connection(conn):
+        return
     for table in ("hosted_room_driver_leases", "hosted_room_driver_tasks"):
         if not any(
             row[2] == "hosted_rooms" and row[3] == "room_id" and row[4] == "room_id"
@@ -268,6 +271,8 @@ def _connect(db_path: DbPath) -> sqlite3.Connection:
         existing.append(_schema_objects_exist(conn))
         if not existing[0]:
             return False
+        if is_postgres_connection(conn):
+            return True
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='hosted_room_driver_tasks'").fetchone()
         sql = str(row[0] or "").lower() if row else ""

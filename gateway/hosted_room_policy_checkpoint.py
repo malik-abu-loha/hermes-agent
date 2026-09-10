@@ -11,6 +11,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from hermes_db import connect_database, is_postgres_connection
 from typing import Any, Callable, Mapping
 
 from gateway import hosted_rooms
@@ -112,9 +113,10 @@ class HostedRoomPolicyCheckpoint:
     def _connect(self) -> sqlite3.Connection:
         from hermes_state_wal import apply_wal_with_fallback
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn = connect_database(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
-        apply_wal_with_fallback(conn, db_label="state.db (room policy checkpoint)")
+        if not is_postgres_connection(conn):
+            apply_wal_with_fallback(conn, db_label="state.db (room policy checkpoint)")
         return conn
 
     @staticmethod

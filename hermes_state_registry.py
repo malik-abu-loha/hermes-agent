@@ -188,19 +188,22 @@ def acquire(db_path: Optional[Path] = None) -> "SessionDB":
     whatever ``SessionDB.__init__`` raises; on a replacement-open failure the registry
     holds NO entry for the path."""
     from hermes_state import _default_db_path
-
+    from hermes_db import settings_for_path
+    # PostgreSQL maps each profile's historical state.db pathname to an
+    # isolated schema, so the real logical path remains the registry key.
     raw_path = Path(db_path) if db_path is not None else Path(_default_db_path())
     try:
         path = raw_path.resolve()
     except OSError:
         path = raw_path
+    postgres = settings_for_path(path).backend == "postgres"
 
     while True:
         wait_for: Optional[threading.Event] = None
         with _lock:
             generation = _generations.get(path)
             if generation is not None:
-                current = _stat_db_file_identity(path)
+                current = None if postgres else _stat_db_file_identity(path)
                 if current is not None and generation.identity is not None and current != generation.identity:
                     # File replaced: retire this generation so it is never lent again, then elect one
                     # caller to open the replacement. It stays alive for its holders, tracked in
@@ -233,7 +236,7 @@ def acquire(db_path: Optional[Path] = None) -> "SessionDB":
             with lifecycle_lock:
                 db = _open_session_db(path)
                 db._shared_registry_owned = True
-                identity = _stat_db_file_identity(path)
+                identity = None if postgres else _stat_db_file_identity(path)
         except BaseException:
             with _lock:
                 _finish_opening(path, opening)

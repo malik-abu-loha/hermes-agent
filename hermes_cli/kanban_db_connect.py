@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 from typing import Optional
 
+from hermes_db import connect_database, settings_for_path
+
 
 # ---------------------------------------------------------------------------
 # Connection helpers
@@ -177,6 +179,17 @@ def _dispatch_tick_lock(db_path: Path):
     lock is the defense-in-depth that prevents two dispatchers from ever writing concurrently *regardless of
     how the second one got there*.
     """
+    if settings_for_path(db_path).backend == "postgres":
+        conn = connect_database(db_path, isolation_level=None)
+        try:
+            acquired = conn.raw.execute(
+                "SELECT pg_try_advisory_lock(hashtextextended(%s, 1))", (conn.schema,)
+            ).fetchone()[0]
+            yield bool(acquired)
+        finally:
+            # Closing this dedicated connection releases its session lock.
+            conn.close()
+        return
     lock_path = db_path.with_name(db_path.name + ".dispatch.lock")
     handle = None
     acquired = False
@@ -575,6 +588,17 @@ def repair_db(db_path: Optional[Path] = None, *, board: Optional[str] = None) ->
     (locked/busy) still propagates raw: a locked healthy DB must not be
     quarantined."""
     path = db_path if db_path is not None else _kb.kanban_db_path(board=board)
+    if settings_for_path(path).backend == "postgres":
+        # Page/index repair is a SQLite file operation.  Connectivity plus a
+        # trivial query is the safe equivalent here; PostgreSQL integrity,
+        # REINDEX, and physical backups remain operator responsibilities.
+        with connect_closing(db_path=path) as conn:
+            conn.execute("SELECT 1").fetchone()
+        return RepairResult(
+            status="ok",
+            db_path=Path(path),
+            messages=["PostgreSQL connectivity and schema check passed"],
+        )
     try:
         resolved = path.resolve()
     except OSError:
@@ -671,8 +695,32 @@ def connect(db_path: Optional[Path] = None, *, board: Optional[str] = None) -> s
     ``_INITIALIZED_PATHS``. Path: explicit ``db_path``, else ``board``, else
     :func:`kanban_db_path` (``HERMES_KANBAN_DB`` -> ``HERMES_KANBAN_BOARD`` ->
     ``<root>/kanban/current`` -> ``default``)."""
-    path = db_path if db_path is not None else _kb.kanban_db_path(board=board)
     from agent.delegation_context import is_delegated_child_process_context
+
+    path = db_path if db_path is not None else _kb.kanban_db_path(board=board)
+    if settings_for_path(path).backend == "postgres":
+        # Each historical board path maps to its own PostgreSQL schema.  There
+        # are no SQLite files, WALs, byte probes, repair locks, or sidecars in
+        # this branch; PostgreSQL transactions provide cross-process safety.
+        conn = connect_database(path, isolation_level=None)
+        try:
+            if is_delegated_child_process_context():
+                conn.raw.execute("SET default_transaction_read_only = on")
+                if not _schema_is_present(conn):
+                    raise PermissionError("Kanban descendants require an initialized board; ask its owner to initialize it")
+                return conn
+            conn.raw.execute("SELECT pg_advisory_lock(hashtextextended(%s, 3))", (conn.schema,))
+            try:
+                conn.executescript(_kb.SCHEMA_SQL)
+                _migrate_add_optional_columns(conn)
+                conn.commit()
+            finally:
+                conn.raw.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 3))", (conn.schema,))
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+        return conn
     if is_delegated_child_process_context():
         # Reads must not enter schema/backfill write transactions. Never create a
         # missing board or migrate on a descendant's behalf; the owner initializes it.

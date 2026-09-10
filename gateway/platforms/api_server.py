@@ -27,6 +27,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from hermes_db import connect_database, is_postgres_connection, settings_for_path
+
 # _resolve_request_profile result for a /p/<profile>/ prefix this gateway does not serve (-> 404);
 # distinct from None (no prefix / multiplexing off -> default profile).
 _PROFILE_REJECTED = object()
@@ -667,13 +669,16 @@ class ResponseStore:
                 db_path = str(get_hermes_home() / "response_store.db")
         self._db_path: Optional[str] = db_path if db_path != ":memory:" else None
         try:
-            self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._conn = connect_database(db_path, check_same_thread=False)
         except Exception:
-            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            if settings_for_path(db_path).backend == "postgres":
+                raise
+            self._conn = connect_database(":memory:", check_same_thread=False)
             self._db_path = None
         # Shared WAL-fallback so response_store.db degrades gracefully on NFS/SMB/FUSE homes.
         from hermes_state_wal import apply_wal_with_fallback
-        apply_wal_with_fallback(self._conn, db_label="response_store.db")
+        if not is_postgres_connection(self._conn):
+            apply_wal_with_fallback(self._conn, db_label="response_store.db")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS responses ("
             "response_id TEXT PRIMARY KEY, data TEXT NOT NULL, accessed_at REAL NOT NULL)")

@@ -49,7 +49,12 @@ def _get_sessions_dir() -> Path:
     return _hermes_home() / "sessions"
 
 
-def _read_state_db_mtime() -> float:
+def _read_state_db_mtime(db=None) -> float:
+    if getattr(db, "backend", None) == "postgres":
+        try:
+            return float(db.change_revision())
+        except Exception:
+            return -1.0
     try:
         return (_hermes_home() / "state.db").stat().st_mtime
     except OSError:  # missing file included
@@ -358,7 +363,7 @@ class EventBridge:
         if not db:
             return
         try:
-            self._state_db_mtime = _read_state_db_mtime()
+            self._state_db_mtime = _read_state_db_mtime(db)
             try:
                 self._cached_sessions_index = _load_sessions_index()
             except Exception:
@@ -402,7 +407,7 @@ class EventBridge:
 
         See #8925, #9006.
         """
-        db_mtime = _read_state_db_mtime()
+        db_mtime = _read_state_db_mtime(db)
         if db_mtime == self._state_db_mtime:
             return
         self._state_db_mtime = db_mtime

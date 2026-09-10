@@ -1383,7 +1383,8 @@ def count_running_tasks_other_boards(board: Optional[str] = None) -> int:
             resolved = str(path.resolve())
             if current_path is not None and resolved == current_path:
                 continue
-            if not path.exists():
+            from hermes_db import settings_for_path
+            if settings_for_path(path).backend != "postgres" and not path.exists():
                 continue
             other = _kbc.connect(board=slug)
             try:

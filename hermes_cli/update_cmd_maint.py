@@ -500,6 +500,9 @@ def _verify_and_restore_one_state_db(home: Path, *, label: str) -> None:
     """Integrity check + auto-restore for ONE home's state.db from its newest valid snapshot.
     Never raises: a guard that crashes the update tail is worse than what it detects."""
     try:
+        from hermes_state_backend import configured_database_backend
+        if configured_database_backend(home) == "postgres":
+            return
         from hermes_cli.backup import _quick_snapshot_root, verify_sqlite_integrity
         state_path = home / "state.db"
         if not state_path.exists():
@@ -722,6 +725,9 @@ def _verify_state_db_after_snapshot(snapshot_id: str) -> None:
     gateway, Windows filter driver) can corrupt it and we'd otherwise exit 0 silently."""
     from hermes_cli.backup import _quick_snapshot_root, verify_sqlite_integrity
     from hermes_cli.config import get_hermes_home
+    from hermes_state_backend import configured_database_backend
+    if configured_database_backend(get_hermes_home()) == "postgres":
+        return
     _src_path = get_hermes_home() / "state.db"
     if not _src_path.exists():
         return

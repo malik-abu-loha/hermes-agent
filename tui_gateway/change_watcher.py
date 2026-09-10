@@ -4,6 +4,8 @@ rebound onto server.py's globals at install time (method_ctx.bind_module)."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
@@ -123,6 +125,20 @@ def _sessions_sig():
     gateway's transports; the shared SQLite file is the one thing they all move (#58671). A backend serving
     several profiles owns one store per profile, so every served sibling home is
     """
+    try:
+        from hermes_state_backend import load_database_settings
+        if load_database_settings(_watcher_home()).backend == "postgres":
+            from hermes_state import SessionDB
+            revisions = []
+            for root in (_watcher_home(), *_served_profile_homes):
+                if load_database_settings(root).backend == "postgres":
+                    with SessionDB(db_path=root / "state.db", read_only=True) as db:
+                        revisions.append(db.change_revision())
+                else:
+                    revisions.append(_newest_mtime_ns(root / name for name in ("state.db", "state.db-wal")))
+            return tuple(revisions)
+    except Exception:
+        return None
     return _newest_mtime_ns(
         root / name
         for root in (_watcher_home(), *_served_profile_homes)

@@ -304,7 +304,7 @@ def _aux_usage_rows(db, cutoff: float) -> List[Dict[str, Any]]:
     See #23270.
     """
     try:
-        cur = db._conn.execute("""
+        sql = """
             SELECT u.model,
                    u.task,
                    u.billing_provider,
@@ -321,8 +321,11 @@ def _aux_usage_rows(db, cutoff: float) -> List[Dict[str, Any]]:
             WHERE s.started_at > ? AND u.task != ''
             GROUP BY u.model, u.task, u.billing_provider
             ORDER BY SUM(u.input_tokens) + SUM(u.output_tokens) DESC
-        """, (cutoff,))
-        return [dict(r) for r in cur.fetchall()]
+        """
+        rows = (db._read_all(sql, (cutoff,))
+                if getattr(db, "backend", None) == "postgres"
+                else db._conn.execute(sql, (cutoff,)).fetchall())
+        return [dict(r) for r in rows]
     except Exception:
         return []
 

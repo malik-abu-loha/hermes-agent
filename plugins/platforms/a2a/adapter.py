@@ -130,10 +130,13 @@ def _state_db(profile: str, sql: str, params: tuple, log_msg: str, *, commit: bo
     """Run one statement against a profile's state.db; first column of the first row or ""."""
     home = _profile_home(profile)
     db = os.path.join(home, "state.db") if home else ""
-    if not db or not os.path.exists(db):
+    if not db:
         return ""
     try:
-        with contextlib.closing(sqlite3.connect(db, timeout=5)) as con:
+        from hermes_db import connect_database, settings_for_path
+        if settings_for_path(db).backend != "postgres" and not os.path.exists(db):
+            return ""
+        with contextlib.closing(connect_database(db, timeout=5)) as con:
             cur = con.execute(sql, params)
             row = None if commit else cur.fetchone()
             if commit:

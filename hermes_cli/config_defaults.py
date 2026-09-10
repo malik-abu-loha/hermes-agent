@@ -27,10 +27,19 @@ DEFAULT_CONFIG = {
     # journal_mode: SQLite journal mode for every Hermes DB. "wal" default; use "delete" on
     # weak-fsync/shared filesystems where WAL is not crash-safe (macOS virtiofs, NFS, SMB).
     "database": {
+        # Canonical session/application state backend. PostgreSQL reads its
+        # credential URL from HERMES_DATABASE_URL; SQLite remains the default.
+        "backend": "sqlite",
+        "namespace": None,  # Optional stable, unique PostgreSQL identity per profile.
         "journal_mode": "wal",
         # WAL sizing pragmas (ints). None = SQLite defaults (autocheckpoint 1000 pages, no limit).
         "wal_autocheckpoint": None,
         "journal_size_limit": None,
+        # PostgreSQL-only bounded pool/connect settings.
+        "connect_timeout": 5,
+        "pool_timeout": 10,
+        "pool_min_size": 1,
+        "pool_max_size": 8,
     },
     # Soft fd limit for long-running server processes; clamped to OS hard limit. 0/false/null = off.
     "runtime": {"nofile_soft_limit": 4096},

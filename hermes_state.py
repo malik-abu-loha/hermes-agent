@@ -325,13 +325,31 @@ def _foreign_state_db_holders(db_path: Path) -> List[Tuple[int, str]]:
 # one-shots, recovery flows, and read-only cross-profile opens use SessionDB() directly with their own close().
 
 
+class _SessionDBMeta(type):
+    """Keep the long-standing ``SessionDB(...)`` constructor as the backend factory."""
+
+    def __call__(cls, *args, **kwargs):
+        if cls is SessionDB:
+            from hermes_db import settings_for_path
+            requested_path = kwargs.get("db_path", args[0] if args else _default_db_path())
+            if str(requested_path) != ":memory:" and settings_for_path(requested_path).backend == "postgres":
+                from hermes_state_postgres import PostgresSessionDB
+                return PostgresSessionDB(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
+
+
 class SessionDB(
     SessionSessionsMixin, SessionFtsSetupMixin, SessionSearchMixin, SessionSchemaMixin,
     SessionPortabilityMixin, SessionTelegramTopicsMixin, SessionCompressionMixin,
     SessionGatewayMixin, SessionMaintenanceMixin, SessionUsageMixin, SessionTitlesMixin,
     SessionMessagesMixin,
+    metaclass=_SessionDBMeta,
 ):
-    """SQLite-backed session storage with FTS5 search; many reader threads, one writer (WAL)."""
+    """Canonical session storage; SQLite by default, PostgreSQL when configured.
+
+    The PostgreSQL dispatch lives here so existing callers and upstream-facing
+    APIs continue constructing ``SessionDB`` without backend conditionals.
+    """
 
     # Only these state-owned producers join automatic stale-open reconciliation; messaging/UI
     # sources have their own lifecycle owners; unknown sources fail closed.

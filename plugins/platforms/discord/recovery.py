@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from hermes_constants import get_hermes_home
+from hermes_db import connect_database, is_postgres_connection
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ _RETENTION_DAYS = 30
 
 
 class DiscordRecoveryStore:
-    """Small profile-scoped SQLite ledger for completed Discord messages."""
+    """Small profile-scoped durable ledger for completed Discord messages."""
 
     def __init__(self, hermes_home: Path | None = None) -> None:
         self._lock = threading.Lock()
@@ -36,13 +37,14 @@ class DiscordRecoveryStore:
         try:
             with self._lock:
                 path = self.path()
-                conn = sqlite3.connect(path, timeout=0.1)
+                conn = connect_database(path, timeout=0.1)
                 try:
                     if not self._initialized:
                         self._initialize(conn)
                         self._initialized = True
-                        with suppress(OSError):
-                            os.chmod(path, 0o600)
+                        if not is_postgres_connection(conn):
+                            with suppress(OSError):
+                                os.chmod(path, 0o600)
                     result = fn(conn)
                     conn.commit()
                     return result
@@ -54,7 +56,8 @@ class DiscordRecoveryStore:
 
     def _initialize(self, conn: sqlite3.Connection) -> None:
         from hermes_state_wal import apply_wal_with_fallback
-        apply_wal_with_fallback(conn, db_label="discord_recovery.db")
+        if not is_postgres_connection(conn):
+            apply_wal_with_fallback(conn, db_label="discord_recovery.db")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS discord_messages (
                 message_id TEXT PRIMARY KEY, channel_id TEXT, thread_id TEXT, parent_channel_id TEXT,

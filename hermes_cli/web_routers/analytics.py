@@ -71,6 +71,12 @@ async def update_config_raw(body: RawConfigUpdate, profile: Optional[str] = None
 
 
 def _rows(db, sql: str, cutoff: float) -> List[Dict[str, Any]]:
+    if getattr(db, "backend", None) == "postgres":
+        sql = sql.replace(
+            "date(started_at, 'unixepoch')",
+            "to_char(to_timestamp(started_at), 'YYYY-MM-DD')",
+        )
+        return [dict(r) for r in db._read_all(sql, (cutoff,))]
     return [dict(r) for r in db._conn.execute(sql, (cutoff,)).fetchall()]
 
 

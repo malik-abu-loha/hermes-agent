@@ -45,6 +45,8 @@ def _key(path: Path | str) -> str:
 def _canonical_db_path(conn: sqlite3.Connection) -> Optional[str]:
     """The on-disk path of ``main`` as SQLite reports it (immune to ``file:`` URIs, relative paths,
     symlinks). ``None`` for in-memory/unnamed databases, which cannot be byte-probed."""
+    if getattr(conn, "backend", None) == "postgres":
+        return None  # A network store has no local database file to probe.
     try:
         row = conn.execute("PRAGMA database_list").fetchone()
     except sqlite3.Error:

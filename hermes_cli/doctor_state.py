@@ -257,6 +257,27 @@ def _state_db_wal(f: Finding, should_fix: bool, state_db_path: Path) -> None:
 def _check_state_db(should_fix: bool, f: Finding) -> None:
     """state.db session count, FTS write health, schema repair, stats snapshot, WAL size."""
     from hermes_cli.doctor import HERMES_HOME, _DHH
+    from hermes_state_backend import load_database_settings
+    try:
+        settings = load_database_settings(HERMES_HOME)
+    except Exception as exc:
+        check_warn(f"PostgreSQL configuration is invalid: {type(exc).__name__}")
+        return
+    if settings.backend == "postgres":
+        try:
+            from hermes_state import SessionDB
+            db = SessionDB(db_path=HERMES_HOME / "state.db", read_only=True)
+            try:
+                check_ok(f"PostgreSQL session store is reachable ({db.session_count()} sessions)")
+                size = db.logical_size_bytes()
+                if size is not None:
+                    check_info(f"PostgreSQL database size {_human_bytes(size)}")
+            finally:
+                db.close()
+        except Exception as exc:
+            check_warn(f"PostgreSQL session store is unavailable: {type(exc).__name__}")
+            f.issues.append("PostgreSQL unavailable — check connectivity, TLS, credentials, and service health")
+        return
     state_db_path = HERMES_HOME / "state.db"
     if state_db_path.exists():
         _state_db_health(f, should_fix, state_db_path, _DHH)

@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
+from hermes_db import connect_database, is_postgres_connection, settings_for_path
+
 
 # Keep the extracted store's log records on the API server logger.
 logger = logging.getLogger("gateway.platforms.api_server")
@@ -69,7 +71,7 @@ class RunIdempotencyStore:
                 db_path = ":memory:"
         self._db_path = None if db_path == ":memory:" else db_path
         try:
-            self._conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
+            self._conn = connect_database(db_path, check_same_thread=False, timeout=30)
         except Exception as exc:
             # Docker may create the container object before `docker run` fails to start it (e.g. exit code
             # 125 when the daemon isn't ready, or a timeout mid-pull). That orphan is left in "Created"
@@ -78,10 +80,13 @@ class RunIdempotencyStore:
             logger.warning(
                 "Run idempotency storage is unavailable; falling back to "
                 "process memory, so replay will not survive a restart: %s", exc)
-            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            if settings_for_path(db_path).backend == "postgres":
+                raise
+            self._conn = connect_database(":memory:", check_same_thread=False)
             self._db_path = None
         from hermes_state_wal import apply_wal_with_fallback
-        apply_wal_with_fallback(self._conn, db_label="runs_idempotency.db")
+        if not is_postgres_connection(self._conn):
+            apply_wal_with_fallback(self._conn, db_label="runs_idempotency.db")
         self._conn.execute(
             """CREATE TABLE IF NOT EXISTS run_idempotency (
                 scope TEXT NOT NULL,

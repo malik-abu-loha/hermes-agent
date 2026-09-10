@@ -18,6 +18,7 @@ from typing import Iterable, List, Optional
 
 from hermes_cli.sqlite_util import add_column_if_missing as _add_column_if_missing, write_txn
 from hermes_constants import get_hermes_home
+from hermes_db import connect_database, is_postgres_connection
 
 
 def projects_db_path() -> Path:
@@ -120,13 +121,14 @@ def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     path = db_path if db_path is not None else projects_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     resolved = str(path.resolve())
-    conn = sqlite3.connect(str(path))
+    conn = connect_database(str(path))
     try:
         conn.row_factory = sqlite3.Row
         from hermes_state_wal import apply_wal_with_fallback
 
-        apply_wal_with_fallback(conn, db_label="projects.db")
-        conn.execute("PRAGMA foreign_keys=ON")
+        if not is_postgres_connection(conn):
+            apply_wal_with_fallback(conn, db_label="projects.db")
+            conn.execute("PRAGMA foreign_keys=ON")
         if resolved not in _INITIALIZED_PATHS:
             conn.executescript(SCHEMA_SQL)
             cols = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}

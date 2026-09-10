@@ -40,6 +40,7 @@ from hermes_cli.web_models import (
     ProfileSoulUpdate, ProfileDescriptionUpdate, ProfileModelUpdate, ProfileDescribeAuto,
     SessionPrScanBody)
 from hermes_cli.web_server_profiles import _hermes_home_scope
+from hermes_db import settings_for_path
 
 # Same logger the handlers used before extraction (identical logger object).
 _log = logging.getLogger("hermes_cli.web_server")
@@ -224,7 +225,7 @@ def _read_profile_db(name: str, home, errors: Optional[List[Dict[str, str]]],
     performs a ONE-TIME writable open when the store predates a schema addition — read-only
     opens skip column reconciliation and would otherwise fail here on every refresh."""
     db_path = Path(home) / "state.db"
-    if not db_path.exists():
+    if settings_for_path(db_path).backend != "postgres" and not db_path.exists():
         return None
     db = None
     try:
@@ -259,7 +260,19 @@ def _stat_fingerprint(path: Path):
 
 
 def _sidebar_db_fingerprint(db_path: Path):
-    """Track SQLite content changes through the main DB and its WAL."""
+    """Track backend content changes without assuming a local database file."""
+    if settings_for_path(db_path).backend == "postgres":
+        db = None
+        try:
+            db = _open_session_db_at_path(db_path, read_only=True)
+            return ("postgres", db.change_revision())
+        except Exception:
+            # The actual read records a sanitized profile error.  A stable
+            # unavailable token prevents this cache helper from masking it.
+            return ("postgres", None)
+        finally:
+            if db is not None:
+                db.close()
     return (_stat_fingerprint(db_path), _stat_fingerprint(Path(f"{db_path}-wal")))
 
 
@@ -466,7 +479,7 @@ def get_profiles_sessions_sidebar(
         if recents_scope != "all" and name != recents_scope:
             continue
         db_path = Path(home) / "state.db"
-        if not db_path.exists():
+        if settings_for_path(db_path).backend != "postgres" and not db_path.exists():
             continue
         profile_cache_key = (str(db_path), _sidebar_db_fingerprint(db_path), cap["recents"],
                              tuple(recents_exclude_list), cap["cron"], cap["messaging"],

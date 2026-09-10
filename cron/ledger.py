@@ -8,13 +8,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
+from hermes_db import connect_database, is_postgres_connection
+
 
 def open_ledger(path: Path) -> sqlite3.Connection:
     """Open a profile-local ledger DB, creating its cron directory securely."""
     from cron.jobs import _ensure_cron_dir
 
     _ensure_cron_dir(path.parent)
-    return sqlite3.connect(path, timeout=5)
+    return connect_database(path, timeout=5)
 
 
 def prepare_ledger(
@@ -24,10 +26,11 @@ def prepare_ledger(
     from hermes_state_wal import apply_wal_with_fallback
 
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
-    apply_wal_with_fallback(conn, db_label=db_label)
-    if synchronous_full:
-        conn.execute("PRAGMA synchronous=FULL")
+    if not is_postgres_connection(conn):
+        conn.execute("PRAGMA busy_timeout=5000")
+        apply_wal_with_fallback(conn, db_label=db_label)
+        if synchronous_full:
+            conn.execute("PRAGMA synchronous=FULL")
 
 
 @contextmanager

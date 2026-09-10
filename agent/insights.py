@@ -1,4 +1,4 @@
-"""Session Insights Engine: aggregates the SQLite state DB into usage insights (tokens, cost estimates, tool/skill
+"""Session Insights Engine: aggregates the durable state DB into usage insights (tokens, cost estimates, tool/skill
 usage, activity, model/platform breakdowns). ``InsightsEngine(db).generate(days=30)`` → ``format_terminal(report)``."""
 
 import json
@@ -152,7 +152,17 @@ class InsightsEngine:
 
     def __init__(self, db):
         self.db = db
-        self._conn = db._conn
+        self._postgres = getattr(db, "backend", None) == "postgres"
+        self._conn = None if self._postgres else db._conn
+        if self._postgres:
+            # PostgreSQL chooses its own index; SQLite's INDEXED BY clause is
+            # deliberately not part of the backend-neutral query.
+            self._has_assistant_calls_index = False
+            strip = f" INDEXED BY {self._MESSAGES_ASSISTANT_CALLS_INDEX}"
+            for base in self._PINNED:
+                for suffix in ("_ALL", "_WITH_SOURCE"):
+                    setattr(self, base + suffix, getattr(self, base + suffix).replace(strip, ""))
+            return
         try:
             self._has_assistant_calls_index = bool(self._conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?", (self._MESSAGES_ASSISTANT_CALLS_INDEX,)).fetchone())
@@ -167,6 +177,10 @@ class InsightsEngine:
     def _query(self, base: str, cutoff: float, source: Optional[str]) -> list:
         """Rows of ``<base>_WITH_SOURCE`` or ``<base>_ALL`` (instance attrs, so the unpinned fallback applies)."""
         sql, params = (getattr(self, base + "_WITH_SOURCE"), (cutoff, source)) if source else (getattr(self, base + "_ALL"), (cutoff,))
+        if self._postgres:
+            sql = sql.replace("instr(m.tool_calls, 'skill_view') > 0", "POSITION('skill_view' IN m.tool_calls) > 0")
+            sql = sql.replace("instr(m.tool_calls, 'skill_manage') > 0", "POSITION('skill_manage' IN m.tool_calls) > 0")
+            return self.db._read_all(sql, params)
         return self._conn.execute(sql, params).fetchall()
 
     def generate(self, days: int = 30, source: str = None) -> Dict[str, Any]:
@@ -254,8 +268,10 @@ class InsightsEngine:
         """Per-model usage rows; [] when the table is missing (older DB) so the caller falls back to the per-session aggregate."""
         try:
             return [dict(row) for row in self._query("_GET_MODEL_USAGE", cutoff, source)]
-        except sqlite3.OperationalError:
-            return []
+        except Exception as exc:
+            if self._postgres or isinstance(exc, sqlite3.OperationalError):
+                return []
+            raise
 
     # -------------------------------------------------------------- Compute
 

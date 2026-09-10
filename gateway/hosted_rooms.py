@@ -19,6 +19,7 @@ from typing import Any, Mapping
 from gateway.hosted_rooms_common import (
     DbPath, bounded_int, canonical_json, clock as _now, compact_json, connect, fenced_update as _fenced_update,
     identifier, open_sqlite, table_columns, table_exists, transaction, utf8_len)
+from hermes_db import settings_for_path
 
 PROTOCOL_VERSION = 2
 MAX_ROOM_ID_CHARS = 128
@@ -419,6 +420,10 @@ _connect = partial(
 def _read_connection(db_path: DbPath) -> sqlite3.Connection:
     """Open the room store without steady-state journal or migration writes."""
     path = Path(db_path)
+    if settings_for_path(path).backend == "postgres":
+        # The backend-neutral initializer is idempotent and creates no local
+        # file.  PostgreSQL has no separate read-only/file-preflight path.
+        return _connect(path)
     if not path.is_file():
         _connect(path).close()
     conn = open_sqlite(path)
@@ -953,14 +958,14 @@ def append_event(
 
 def _probe(path: Path, table: str, query: str, params: tuple[Any, ...], unavailable: str) -> bool:
     """Non-blocking existence probe: short timeout, no schema creation or migration."""
-    if not path.is_file():
+    if settings_for_path(path).backend != "postgres" and not path.is_file():
         return False
     try:
-        with closing(sqlite3.connect(path, timeout=0.05)) as conn:
+        with closing(open_sqlite(path, timeout=0.05)) as conn:
             table_row = conn.execute(
                 f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}' LIMIT 1").fetchone()
             return table_row is not None and conn.execute(query, params).fetchone() is not None
-    except sqlite3.Error as exc:
+    except Exception as exc:
         raise RoomProbeUnavailableError(unavailable) from exc
 
 

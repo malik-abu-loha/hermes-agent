@@ -39,6 +39,7 @@ from hermes_cli.archive_safe import (
     make_targz,
     safe_extract_targz,
 )
+from hermes_db import is_postgres_connection, settings_for_path
 
 ARCHIVE_FORMAT = "hermes-kanban-board"
 ARCHIVE_FORMAT_VERSION = 1
@@ -65,6 +66,68 @@ def _snapshot_db(source: Path, target: Path) -> None:
     with contextlib.closing(sqlite3.connect(str(source))) as src, \
             contextlib.closing(sqlite3.connect(str(target))) as dst:
         src.backup(dst)
+
+
+def _user_tables(conn) -> list[str]:
+    if is_postgres_connection(conn):
+        return [str(row[0]) for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema=current_schema() AND table_type='BASE TABLE' "
+            "ORDER BY table_name"
+        ).fetchall()]
+    return [str(row[0]) for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall()]
+
+
+def _copy_rows(source, target) -> None:
+    """Copy the common columns of every user table between empty board stores."""
+    for table in _user_tables(source):
+        source_columns = [str(row[1]) for row in source.execute(f'PRAGMA table_info("{table}")')]
+        target_columns = {str(row[1]) for row in target.execute(f'PRAGMA table_info("{table}")')}
+        columns = [column for column in source_columns if column in target_columns]
+        if not columns:
+            continue
+        quoted = ", ".join(f'"{column}"' for column in columns)
+        rows = source.execute(f'SELECT {quoted} FROM "{table}"').fetchall()
+        if rows:
+            placeholders = ", ".join("?" for _ in columns)
+            target.executemany(
+                f'INSERT OR IGNORE INTO "{table}" ({quoted}) VALUES ({placeholders})',
+                [tuple(row[index] for index in range(len(columns))) for row in rows],
+            )
+
+
+def _snapshot_postgres(source: Path, target: Path) -> None:
+    """Create the existing portable SQLite archive payload from a PostgreSQL board."""
+    with contextlib.closing(sqlite3.connect(str(target))) as snapshot:
+        snapshot.executescript(kb.SCHEMA_SQL)
+        with kbc.connect_closing(db_path=source) as live:
+            with live.raw.transaction():
+                live.raw.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                _copy_rows(live, snapshot)
+        snapshot.commit()
+
+
+def _import_postgres_snapshot(source: Path, target) -> None:
+    with contextlib.closing(sqlite3.connect(str(source))) as snapshot:
+        _copy_rows(snapshot, target)
+    # Explicit ids in the portable archive do not advance PostgreSQL
+    # sequences. Keep the next generated id beyond every imported row.
+    for table in _user_tables(target):
+        columns = {str(row[1]) for row in target.execute(f'PRAGMA table_info("{table}")')}
+        if "id" not in columns:
+            continue
+        sequence = target.execute(
+            "SELECT pg_get_serial_sequence(?, 'id')", (table,)
+        ).fetchone()[0]
+        if sequence:
+            target.execute(
+                f'SELECT setval(?, GREATEST(COALESCE(MAX(id), 0) + 1, 1), false) '
+                f'FROM "{table}"',
+                (sequence,),
+            )
 
 
 def _scrub_local_state(conn: sqlite3.Connection) -> None:
@@ -126,7 +189,8 @@ def export_board(
         raise ValueError(f"board {slug!r} does not exist")
 
     db_path = kb.kanban_db_path(slug)
-    if not db_path.exists():
+    postgres = settings_for_path(db_path).backend == "postgres"
+    if not postgres and not db_path.exists():
         raise FileNotFoundError(f"board {slug!r} has no database at {db_path}")
 
     base = str(Path(output_path).expanduser()).removesuffix(".tar.gz").removesuffix(".tgz")
@@ -136,7 +200,10 @@ def export_board(
         staged = Path(tmpdir) / slug
         staged.mkdir(parents=True)
 
-        _snapshot_db(db_path, staged / "kanban.db")
+        if postgres:
+            _snapshot_postgres(db_path, staged / "kanban.db")
+        else:
+            _snapshot_db(db_path, staged / "kanban.db")
         # The snapshot is a private file with no other writers, so plain
         # commit/close is enough — no need for the board DB's WAL dance.
         with contextlib.closing(sqlite3.connect(str(staged / "kanban.db"))) as snapshot:
@@ -304,6 +371,7 @@ def import_board(
         raise ValueError("a kanban board archive must contain exactly one top-level directory")
     archive_root = roots.pop()
 
+    postgres_snapshot: bytes | None = None
     with tempfile.TemporaryDirectory() as tmpdir:
         staging = Path(tmpdir)
         safe_extract_targz(archive, staging)
@@ -326,7 +394,11 @@ def import_board(
 
         board_root = kb.board_dir(target)
         board_root.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(staged_db), str(board_root / "kanban.db"))
+        postgres = settings_for_path(kb.kanban_db_path(target)).backend == "postgres"
+        if postgres:
+            postgres_snapshot = staged_db.read_bytes()
+        else:
+            shutil.move(str(staged_db), str(board_root / "kanban.db"))
         for tree in ("attachments", "logs"):
             src = extracted / tree
             if src.is_dir():
@@ -348,6 +420,12 @@ def import_board(
     kb.init_db(board=target)
 
     with kbc.connect_closing(board=target) as conn:
+        if postgres:
+            with tempfile.NamedTemporaryFile(suffix=".db") as snapshot_file:
+                snapshot_file.write(postgres_snapshot or b"")
+                snapshot_file.flush()
+                with conn.raw.transaction():
+                    _import_postgres_snapshot(Path(snapshot_file.name), conn)
         stats, warnings = _relocate_imported_rows(conn, target)
         counts = _count_rows(conn)
 

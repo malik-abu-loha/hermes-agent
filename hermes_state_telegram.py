@@ -116,6 +116,16 @@ class SessionTelegramTopicsMixin:
 
         See #76423.
         """
+        if getattr(self, "backend", None) == "postgres":
+            # PostgreSQL owns deterministic schema migrations at startup; the
+            # topic tables already exist and opt-in remains a row-level state.
+            self._write_sql(
+                "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("telegram_dm_topic_schema_version", "3"),
+            )
+            return
+
         def _do(conn):
             for table, columns, ddl in _TOPIC_TABLES:
                 conn.execute(f"CREATE TABLE IF NOT EXISTS {table} ({ddl})")

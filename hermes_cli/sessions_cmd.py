@@ -86,6 +86,10 @@ def _write_output(output, text, summary) -> None:
 # -- handlers that must run BEFORE SessionDB() is opened ----------------------
 
 def _cmd_repair(args):
+    from hermes_state_backend import configured_database_backend
+    if configured_database_backend() == "postgres":
+        print("PostgreSQL does not use SQLite file repair; run `hermes doctor` and restore with scripts/postgres_backup.py if needed.")
+        return
     from hermes_state import DEFAULT_DB_PATH as db_path, SessionDB
     from hermes_state_repair import _db_opens_cleanly, repair_state_db_schema
     if not db_path.exists():
@@ -930,7 +934,11 @@ def _cmd_stats(db, args):
     for src in ("cli", "telegram", "discord", "whatsapp", "slack"):
         if (c := db.session_count(source=src)) > 0:
             print(f"  {src}: {c} sessions")
-    if db.db_path.exists():
+    if getattr(db, "backend", None) == "postgres":
+        size = db.logical_size_bytes()
+        if size is not None:
+            print(f"Database size: {size / (1024 * 1024):.1f} MB")
+    elif db.db_path.exists():
         print(f"Database size: {_size_mb(db.db_path):.1f} MB")
 
 

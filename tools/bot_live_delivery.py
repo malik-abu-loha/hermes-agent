@@ -32,9 +32,10 @@ def find_canonical_live_owner(profile_home: Path | str) -> dict[str, Any] | None
     """
     from hermes_cli.active_sessions import active_session_registry_snapshot
     from hermes_state import SessionDB
+    from hermes_state_backend import load_database_settings
 
     home = Path(profile_home).resolve()
-    if not (home / "state.db").is_file():
+    if load_database_settings(home).backend != "postgres" and not (home / "state.db").is_file():
         return None
     db = SessionDB(db_path=home / "state.db", read_only=True)
     try:

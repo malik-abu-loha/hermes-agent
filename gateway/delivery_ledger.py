@@ -23,6 +23,7 @@ from contextlib import closing, contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
 from hermes_constants import get_hermes_home
+from hermes_db import connect_database, is_postgres_connection
 
 logger = logging.getLogger(__name__)
 _DB_LOCK = threading.Lock()
@@ -145,7 +146,7 @@ def _db_path():
 def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=10)
+    conn = connect_database(path, timeout=10)
     try:
         _initialize_schema(conn)
     except Exception:
@@ -156,7 +157,8 @@ def _connect() -> sqlite3.Connection:
 
 def _initialize_schema(conn: sqlite3.Connection) -> None:
     from hermes_state_wal import apply_wal_with_fallback
-    apply_wal_with_fallback(conn, db_label="state.db (delivery_ledger)")
+    if not is_postgres_connection(conn):
+        apply_wal_with_fallback(conn, db_label="state.db (delivery_ledger)")
     conn.execute(
         """CREATE TABLE IF NOT EXISTS delivery_obligations (
             obligation_id TEXT PRIMARY KEY,
@@ -178,9 +180,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     if "adapter_profile" not in {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}:
         try:
             conn.execute("ALTER TABLE delivery_obligations ADD COLUMN adapter_profile TEXT")
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:
             # Concurrent first-use connections can both observe the old schema.
-            if "duplicate column" not in str(exc).lower():
+            if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
                 raise
 
 

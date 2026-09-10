@@ -13,11 +13,15 @@ def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl
     ``column`` is the human-readable name for the call site; ``ddl`` carries the actual definition. See
     #21708.
     """
+    if getattr(conn, "backend", None) == "postgres":
+        before = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {ddl}")
+        return column not in before
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
         return True
-    except sqlite3.OperationalError as exc:
-        if "duplicate column name" in str(exc).lower():
+    except Exception as exc:
+        if "duplicate column" in str(exc).lower() or "already exists" in str(exc).lower():
             return False
         raise
 
@@ -32,7 +36,7 @@ def write_txn(conn: sqlite3.Connection):
     except Exception:
         try:
             conn.execute("ROLLBACK")
-        except sqlite3.OperationalError:
+        except Exception:
             pass
         raise
     else:

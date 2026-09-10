@@ -1308,7 +1308,9 @@ def _projects_by_id() -> dict[str, Any]:
 def _board_counts(slug: str) -> dict[str, int]:
     """``{status: count}`` for a board; ``{}`` on a missing/empty DB."""
     try:
-        if not kanban_db.kanban_db_path(board=slug).exists():
+        from hermes_db import settings_for_path
+        path = kanban_db.kanban_db_path(board=slug)
+        if settings_for_path(path).backend != "postgres" and not path.exists():
             return {}
         with closing(kbc.connect(board=slug)) as conn:
             rows = conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()

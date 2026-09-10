@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from hermes_db import connect_database, is_postgres_connection
+
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 DbPath = Path | str
 
@@ -96,9 +98,10 @@ def clock(now: float | None) -> float:
 
 def open_sqlite(path: DbPath, *, timeout: float = 10) -> sqlite3.Connection:
     """Row-factory connection with foreign keys on; no journal or schema work."""
-    conn = sqlite3.connect(path, timeout=timeout)
+    conn = connect_database(path, timeout=timeout)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    if not is_postgres_connection(conn):
+        conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -116,18 +119,20 @@ def connect(
     from hermes_state_wal import apply_wal_with_fallback
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=10)
+    conn = connect_database(path, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         for attempt in range(lock_retries):
             try:
-                apply_wal_with_fallback(conn, db_label=db_label)
+                if not is_postgres_connection(conn):
+                    apply_wal_with_fallback(conn, db_label=db_label)
                 break
             except sqlite3.OperationalError as exc:
                 if str(exc).lower() != "database is locked" or attempt + 1 == lock_retries:
                     raise
                 time.sleep(0.01 * (2**attempt))
-        conn.execute("PRAGMA foreign_keys=ON")
+        if not is_postgres_connection(conn):
+            conn.execute("PRAGMA foreign_keys=ON")
         if not ready(conn):
             conn.execute("BEGIN IMMEDIATE")
             initialize(conn)

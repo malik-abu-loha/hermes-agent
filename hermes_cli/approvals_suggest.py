@@ -92,6 +92,9 @@ def default_db_path() -> Path:
 
 
 def _connect_readonly(db_path: Path) -> sqlite3.Connection:
+    from hermes_db import connect_database, settings_for_path
+    if settings_for_path(db_path).backend == "postgres":
+        return connect_database(db_path)
     return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 
 
@@ -150,7 +153,8 @@ def scan_approval_history(db_path: Optional[Path] = None, days: int = 90) -> lis
     """
     from tools.approval_detection import detect_dangerous_command, detect_hardline_command
     path = Path(db_path) if db_path else default_db_path()
-    if not path.exists():
+    from hermes_db import settings_for_path
+    if settings_for_path(path).backend != "postgres" and not path.exists():
         return []
 
     since_ts = 0.0 if days <= 0 else time.time() - days * 86400
@@ -305,7 +309,8 @@ def suggest_command(args) -> int:
     """Entry point for ``hermes approvals suggest``."""
     db_path = Path(args.db) if getattr(args, "db", None) else default_db_path()
     days = getattr(args, "days", 90)
-    if not db_path.exists():
+    from hermes_db import settings_for_path
+    if settings_for_path(db_path).backend != "postgres" and not db_path.exists():
         print(f"Session database not found: {db_path}")
         return 1
 

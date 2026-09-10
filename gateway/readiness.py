@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from hermes_constants import get_hermes_home
+from hermes_state_backend import load_database_settings
 
 
 _DISK_DEGRADED_PERCENT = 90.0
@@ -22,9 +23,24 @@ def _check(status: str, detail: str | None = None, **extra: Any) -> dict[str, An
 
 
 def _probe_state_db(home: Path) -> dict[str, Any]:
+    try:
+        settings = load_database_settings(home)
+    except Exception as exc:
+        return _check("degraded", type(exc).__name__)
+    if settings.backend == "postgres":
+        try:
+            import psycopg
+            with psycopg.connect(
+                settings.url, connect_timeout=settings.connect_timeout,
+                application_name="hermes-readiness",
+            ) as conn:
+                conn.execute("SELECT 1").fetchone()
+            return _check("ok", backend="postgres")
+        except Exception as exc:
+            return _check("degraded", type(exc).__name__, backend="postgres")
     path = home / "state.db"
     if not path.exists():
-        return _check("ok", "not initialized")
+        return _check("ok", "not initialized", backend="sqlite")
     try:
         # Read-only schema query: catches unreadable/corrupt DBs without competing with
         # writers. ``closing`` is required — sqlite3's context manager only commits/rolls
@@ -33,9 +49,9 @@ def _probe_state_db(home: Path) -> dict[str, Any]:
             # A readiness probe must never compete with normal state writers. See #69567, #69678.
             conn.execute("PRAGMA query_only = ON")
             conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-        return _check("ok")
+        return _check("ok", backend="sqlite")
     except Exception as exc:
-        return _check("degraded", type(exc).__name__)
+        return _check("degraded", type(exc).__name__, backend="sqlite")
 
 
 def _probe_config(home: Path) -> dict[str, Any]:

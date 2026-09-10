@@ -351,6 +351,11 @@ def _cmd_repair(args: argparse.Namespace) -> int:
     if report.status == "missing":
         print(f"No kanban DB at {report.db_path} — nothing to repair.")
         return 0
+    from hermes_db import settings_for_path
+    if report.status == "ok" and settings_for_path(report.db_path).backend == "postgres":
+        print("PostgreSQL connectivity and Kanban schema check passed; physical integrity "
+              "and REINDEX are database-operator responsibilities.")
+        return 0
     if report.status == "ok":
         print(f"{report.db_path}: integrity_check ok — no repair needed.")
         return 0

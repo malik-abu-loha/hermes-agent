@@ -172,6 +172,20 @@ def check_state_db_integrity(home: Optional[Path] = None) -> str:
     500MB store): cheap once per unclean boot, too costly every boot.  Opened
     normally: a WAL store needs its -shm sidecar for read-only, and the PRAGMA writes nothing.
     """
+    from hermes_state_backend import load_database_settings
+    selected_home = _process_hermes_home() if home is None else home
+    try:
+        settings = load_database_settings(selected_home)
+    except Exception as exc:
+        return f"check-failed: {type(exc).__name__}"
+    if settings.backend == "postgres":
+        try:
+            from hermes_db import connect_database
+            with closing(connect_database(selected_home / "state.db")) as conn:
+                conn.execute("SELECT 1").fetchone()
+            return "ok"
+        except Exception as exc:
+            return f"check-failed: {type(exc).__name__}"
     path = _home_path(home, "state.db")
     if not path.exists():
         return "absent"

@@ -710,6 +710,11 @@ def _sessions_repair(_engine: HermesConsoleEngine, args: list[str]) -> None:
         "sessions repair", args, (("--check-only",), dict(action="store_true")),
         (("--no-backup",), dict(action="store_true")))
     from hermes_state import DEFAULT_DB_PATH
+    from hermes_state_backend import configured_database_backend
+    if configured_database_backend() == "postgres":
+        print("PostgreSQL does not use SQLite file repair; run `hermes doctor` and use "
+              "scripts/postgres_backup.py for restore workflows.")
+        return
     from hermes_state_repair import _db_opens_cleanly, repair_state_db_schema
     db_path = DEFAULT_DB_PATH
     if not db_path.exists():

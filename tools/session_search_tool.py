@@ -125,9 +125,11 @@ def _session_left_live_context(db, session_id: str) -> bool:
 def _get_message_storage_state(db, message_id) -> Optional[Dict[str, Any]]:
     """Owning session and visibility flags for *message_id* (None if missing/error)."""
     def _lookup():
+        sql = "SELECT session_id, active, compacted FROM messages WHERE id = ?"
+        if getattr(db, "backend", None) == "postgres":
+            return db._read_one(sql, (message_id,))
         with db._lock:
-            return db._conn.execute(
-                "SELECT session_id, active, compacted FROM messages WHERE id = ?", (message_id,)).fetchone()
+            return db._conn.execute(sql, (message_id,)).fetchone()
     row = message_id and _quiet(_lookup, None, "message storage-state lookup failed for %s", message_id)
     return dict(row) if row else None
 
@@ -352,9 +354,10 @@ def _locate_session_db(session_id: str):
         lambda: [(info.name, info.path) for info in profiles_mod.list_profiles()], [],
         "list_profiles failed during session locate")
     seen: set = set()
+    from hermes_state_backend import load_database_settings
     for name, home in targets:
         db_path = Path(home) / "state.db"
-        if str(db_path) in seen or not db_path.exists():
+        if str(db_path) in seen or (load_database_settings(Path(home)).backend != "postgres" and not db_path.exists()):
             continue
         seen.add(str(db_path))
         pdb = _quiet(lambda: SessionDB(db_path=db_path, read_only=True), None, "open %s failed", db_path)

@@ -72,7 +72,9 @@ def _count_status_active_sessions() -> int:
     from hermes_state import _default_db_path
     # The heal helper bootstraps a missing store; this garnish must not — on a fresh install
     # /api/status polls would otherwise create state.db before the user's first session.
-    if not Path(_default_db_path()).exists():
+    from hermes_db import settings_for_path
+    db_path = Path(_default_db_path())
+    if settings_for_path(db_path).backend != "postgres" and not db_path.exists():
         return 0
     db = _open_session_db_for_profile(None, read_only=True)
     try:
@@ -362,7 +364,8 @@ async def _advisory_pressure(status: Dict[str, Any], home: Path) -> None:
         from hermes_state import SessionDB as _SDB
         from hermes_constants import get_hermes_home as _ghh
         _db_path = _ghh() / "state.db"
-        if _db_path.exists():
+        from hermes_db import settings_for_path as _settings_for_path
+        if _settings_for_path(_db_path).backend == "postgres" or _db_path.exists():
             _sdb = _SDB(db_path=_db_path, read_only=True)
             try:
                 _rebuild = _sdb.fts_rebuild_status()

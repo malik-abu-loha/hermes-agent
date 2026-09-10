@@ -13,7 +13,13 @@
 # crash-safe, such as Linux containers bind-mounted through macOS virtiofs,
 # NFS, or SMB. Hermes will not live-downgrade a database already open in WAL.
 database:
+  namespace: null      # PostgreSQL: set a stable, unique identity per profile before first use
+  backend: "sqlite"  # "sqlite" (default) or "postgres"; URL comes from HERMES_DATABASE_URL
   journal_mode: "wal"  # Supported values: "wal", "delete"
+  connect_timeout: 5    # PostgreSQL only
+  pool_timeout: 10      # PostgreSQL only
+  pool_min_size: 1      # PostgreSQL only
+  pool_max_size: 8      # PostgreSQL only
   # Optional WAL sizing pragmas (integers). Unset = SQLite defaults.
   # wal_autocheckpoint: 1000     # pages between automatic checkpoints
   # journal_size_limit: 67108864 # cap the WAL/journal file size in bytes

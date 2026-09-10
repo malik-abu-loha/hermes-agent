@@ -206,7 +206,8 @@ def count_notify_subs(
     unreadable — callers pick their own fallback.
     """
     path = db_path if db_path is not None else _kb.kanban_db_path(board=board)
-    if not path.exists():
+    from hermes_db import settings_for_path
+    if settings_for_path(path).backend != "postgres" and not path.exists():
         return 0
     owner_where, owner_params = _notify_profile_filter(
         notifier_profiles, include_unowned=include_unowned,
@@ -227,11 +228,15 @@ def count_notify_subs(
     query = "SELECT COUNT(*) FROM kanban_notify_subs"
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    from hermes_db import connect_database
+    if settings_for_path(path).backend == "postgres":
+        conn = connect_database(path)
+    else:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         try:
             row = conn.execute(query, params).fetchone()
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:
             if "no such table" in str(exc).lower():
                 return 0
             raise

@@ -823,7 +823,9 @@ def _kanban_attachment_roots() -> List[Path]:
     roots = [_kanban_root() / "kanban" / "attachments"]
     roots.extend(path / "attachments" for path in _kanban_board_dirs()
                  if not path.is_symlink() and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", path.name)
-                 and (path / "kanban.db").is_file())
+                 # PostgreSQL boards deliberately have no kanban.db; board.json
+                 # is the durable filesystem marker shared by both backends.
+                 and ((path / "board.json").is_file() or (path / "kanban.db").is_file()))
     return roots
 
 

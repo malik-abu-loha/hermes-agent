@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from hermes_constants import get_hermes_home
+from hermes_db import connect_database, is_postgres_connection
 
 
 _DB_LOCK = threading.Lock()
@@ -124,11 +125,12 @@ def _connect() -> sqlite3.Connection:
 
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = connect_database(path)
     conn.row_factory = sqlite3.Row
     try:
-        apply_wal_with_fallback(conn, db_label="verification_evidence.db")
-        conn.execute("PRAGMA busy_timeout=5000")
+        if not is_postgres_connection(conn):
+            apply_wal_with_fallback(conn, db_label="verification_evidence.db")
+            conn.execute("PRAGMA busy_timeout=5000")
         _ensure_schema(conn)
     except Exception:
         # A PRAGMA/DDL failure after connect() must not leak the open connection.

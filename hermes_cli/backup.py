@@ -610,6 +610,16 @@ def run_backup(args) -> None:
     """Create a zip backup of the Hermes home directory."""
     hermes_root = get_default_hermes_root()
 
+    try:
+        from hermes_state_backend import load_database_settings
+        if load_database_settings().backend == "postgres":
+            print(
+                "Note: this archive covers filesystem state only. Back up PostgreSQL separately with "
+                "`python scripts/postgres_backup.py --home <profile-home> backup <archive.dump>`."
+            )
+    except Exception:
+        pass
+
     if not hermes_root.is_dir():
         print(f"Error: Hermes home directory not found at {hermes_root}")
         sys.exit(1)
@@ -1520,6 +1530,12 @@ def prune_quick_snapshots(keep: int = _QUICK_DEFAULT_KEEP, hermes_home: Optional
 
 def run_quick_backup(args) -> None:
     """CLI entry point for hermes backup --quick."""
+    try:
+        from hermes_state_backend import load_database_settings
+        if load_database_settings().backend == "postgres":
+            print("Note: quick snapshots do not contain PostgreSQL data; use scripts/postgres_backup.py as well.")
+    except Exception:
+        pass
     snap_id = create_quick_snapshot(label=getattr(args, "label", None))
     if snap_id:
         print(f"State snapshot created: {snap_id}\n"

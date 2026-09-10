@@ -97,13 +97,15 @@ def _latest_message_preview(db, session_id):
     """≤80-char excerpt of the NEWEST active user/assistant message, or "" (roster semantics).
     Same query shape as ``SessionDB.latest_message_row_id``; keep them in step."""
     try:
-        with db._lock:
-            row = db._conn.execute(
-                "SELECT content FROM messages"
-                " WHERE session_id = ? AND role IN ('user', 'assistant')"
-                " AND active = 1 AND content IS NOT NULL AND TRIM(content) != ''"
-                " ORDER BY id DESC LIMIT 1",
-                (session_id,)).fetchone()
+        sql = ("SELECT content FROM messages"
+               " WHERE session_id = ? AND role IN ('user', 'assistant')"
+               " AND active = 1 AND content IS NOT NULL AND TRIM(content) != ''"
+               " ORDER BY id DESC LIMIT 1")
+        if getattr(db, "backend", None) == "postgres":
+            row = db._read_one(sql, (session_id,))
+        else:
+            with db._lock:
+                row = db._conn.execute(sql, (session_id,)).fetchone()
     except Exception:
         return ""
     text = " ".join(str(row[0] or "").split()).strip() if row else ""
@@ -210,7 +212,8 @@ def _profile_session_fields(row, profile_path):
     and stalled the 5s roster poll); no/unreadable DB -> every field None (the readers swallow)."""
     db_path = Path(profile_path) / "state.db"
     db = None
-    if _try(db_path.exists, False):
+    from hermes_db import settings_for_path
+    if settings_for_path(db_path).backend == "postgres" or _try(db_path.exists, False):
         db = _try(lambda: _lazy("hermes_state", "SessionDB")(db_path=db_path, read_only=True), None)
     try:
         row["last_session"], row["worker_session"] = _latest_profile_session_rows(db)

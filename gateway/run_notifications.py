@@ -784,7 +784,14 @@ class GatewayNotificationsMixin:
             return
         from hermes_constants import get_default_hermes_root
         from hermes_state import _default_db_path, classify_persistence_error, format_session_db_unavailable
-        if classify_persistence_error(error) == "corrupt":
+        from hermes_state_backend import configured_database_backend
+        if configured_database_backend() == "postgres":
+            message = (
+                "⚠️ PostgreSQL session storage is unavailable — messages may not be persisted. "
+                "Check database connectivity, TLS, credentials, and the managed PostgreSQL service health.\n"
+                "Run `hermes doctor` for sanitized diagnostics."
+            )
+        elif classify_persistence_error(error) == "corrupt":
             # Copy-pasteable, so name the real store (profiles / HERMES_HOME do not live under ~/.hermes).
             db_path = _default_db_path()
             backups_dir = get_default_hermes_root() / "backups"

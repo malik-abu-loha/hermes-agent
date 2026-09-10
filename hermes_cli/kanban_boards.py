@@ -25,7 +25,9 @@ def _dispatch_boards(args: argparse.Namespace) -> int:
 def _board_task_counts(slug: str) -> dict[str, int]:
     """``{status: count}`` for a board. Safe to call on an empty DB."""
     try:
-        if not kb.kanban_db_path(board=slug).exists():
+        from hermes_db import settings_for_path
+        path = kb.kanban_db_path(board=slug)
+        if settings_for_path(path).backend != "postgres" and not path.exists():
             return {}
         with kbc.connect_closing(board=slug) as conn:
             rows = conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()
