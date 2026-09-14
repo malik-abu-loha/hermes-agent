@@ -107,10 +107,10 @@ class SessionTitlesMixin:
                         conn.execute("UPDATE sessions SET title = NULL WHERE id = ?", (conflict_id,))
                     else:
                         raise ValueError(f"Title '{title}' is already in use by session {conflict_id}")
-            # CAS on the values just read (``IS`` is NULL-safe): a concurrent write between
+            # NULL-safe comparison on the values just read: a concurrent write between
             # the SELECT and here loses instead of being overwritten.
             return conn.execute(
-                "UPDATE sessions SET title = ?, title_source = ? WHERE id = ? AND title IS ? AND title_source IS ?",
+                "UPDATE sessions SET title = ?, title_source = ? WHERE id = ? AND title IS NOT DISTINCT FROM ? AND title_source IS NOT DISTINCT FROM ?",
                 (title, source if title else None, session_id, current["title"], current["title_source"]),
             ).rowcount
 
