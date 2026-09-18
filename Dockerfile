@@ -266,10 +266,14 @@ RUN cd plugins/platforms/photon/sidecar && \
 # the sealed venv. Runtime --install-deps still routes through lazy_deps into
 # HERMES_LAZY_INSTALL_TARGET when the extra is not present.
 #
+# PostgreSQL session storage is selected before the agent starts and the image
+# disables runtime installs. Bake [postgres] so a configured container can
+# open its session database without modifying the sealed environment.
+#
 # The editable link is created after the source copy below.
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
-RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra google-chat
+RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra google-chat --extra postgres
 
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't
