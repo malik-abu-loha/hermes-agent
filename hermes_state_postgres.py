@@ -21,7 +21,8 @@ from hermes_state import SessionDB, _default_db_path
 from hermes_state_backend import resolve_database_settings
 from hermes_state_common import SCHEMA_VERSION
 from hermes_state_postgres_schema import (
-    DELIVERY_SCHEMA_SQL, DISPLAY_SQL, FUNCTION_SQL, POSTGRES_SCHEMA_VERSION, POSTGRES_SCHEMA_SQL, SEARCH_SQL,
+    CRON_SCHEMA_SQL, DELIVERY_SCHEMA_SQL, DISPLAY_SQL, FUNCTION_SQL, POSTGRES_SCHEMA_VERSION,
+    POSTGRES_SCHEMA_SQL, SEARCH_SQL,
     TELEGRAM_SCHEMA_SQL,
 )
 from hermes_state_postgres_search import SessionPostgresSearchMixin
@@ -65,6 +66,8 @@ def _row_factory(cursor):
 
 class PostgresConnection:
     """The DB-API operations used by shared session methods, over a borrowed connection."""
+
+    backend = 'postgres'
 
     def __init__(self, conn):
         self._conn = conn
@@ -169,8 +172,12 @@ class PostgresSessionDB(SessionPostgresSearchMixin, SessionPostgresMaintenanceMi
                 version = conn.execute('SELECT version FROM postgres_schema_version').fetchone()[0]
                 if version == 1:
                     conn.execute(DELIVERY_SCHEMA_SQL)
-                    conn.execute('UPDATE postgres_schema_version SET version = %s', (POSTGRES_SCHEMA_VERSION,))
-                    return
+                    version = 2
+                    conn.execute('UPDATE postgres_schema_version SET version = %s', (version,))
+                if version == 2:
+                    conn.execute(CRON_SCHEMA_SQL)
+                    version = 3
+                    conn.execute('UPDATE postgres_schema_version SET version = %s', (version,))
                 if version != POSTGRES_SCHEMA_VERSION:
                     raise RuntimeError('Unsupported PostgreSQL schema version')
                 return
@@ -205,7 +212,8 @@ class PostgresSessionDB(SessionPostgresSearchMixin, SessionPostgresMaintenanceMi
         except psycopg.errors.QueryCanceled as exc:
             raise TimeoutError(f"recent-session browse exceeded {timeout_seconds:g}s deadline") from exc
 
-    def _execute_write(self, fn, patience_s=None):
+    @contextmanager
+    def _write_ctx(self, patience_s=None, *, lock_scope=None):
         if self.read_only:
             raise RuntimeError('SessionDB is read-only')
         if self._closed:
@@ -216,13 +224,17 @@ class PostgresSessionDB(SessionPostgresSearchMixin, SessionPostgresMaintenanceMi
             with conn.transaction():
                 remaining = max(1, int((deadline - time.monotonic()) * 1000))
                 conn.execute("SELECT set_config('lock_timeout', %s, true)", (str(remaining),))
-                # Shared methods perform read/check/write operations under SQLite's
-                # single-writer contract. Keep that contract across PostgreSQL clients;
-                # readers use independent connections and never acquire this lock.
-                conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', (self.schema,))
-                result = fn(PostgresConnection(conn))
+                # Session methods preserve SQLite's single-writer ordering with the
+                # schema lock. Application stores supply a narrower lock scope so
+                # unrelated session and cron writes can proceed concurrently.
+                lock_name = self.schema if lock_scope is None else f'{self.schema}:{lock_scope}'
+                conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', (lock_name,))
+                yield PostgresConnection(conn)
             self._write_count += 1
-            return result
+
+    def _execute_write(self, fn, patience_s=None):
+        with self._write_ctx(patience_s) as conn:
+            return fn(conn)
 
     def _message_column_names(self, conn):
         if not hasattr(self, '_message_columns_cache'):
