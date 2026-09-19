@@ -15,12 +15,14 @@ from hermes_constants import get_hermes_home
 from hermes_state import SessionDB
 
 
-# Foreign-key parents first. Runtime leases/heartbeats and application ledgers
-# belong to running processes and are deliberately not transferred.
+# Foreign-key parents first. Runtime leases and heartbeats belong to running
+# processes and are deliberately not transferred. Delivery obligations are
+# durable owed responses, so unfinished rows must survive the backend move.
 _TABLES = (
     'system_prompts', 'sessions', 'messages', 'session_model_usage',
     'state_meta', 'gateway_routing', 'gateway_hygiene_state', 'conversation_generations',
     'telegram_dm_topic_mode', 'telegram_dm_topic_bindings',
+    'delivery_obligations',
 )
 
 
