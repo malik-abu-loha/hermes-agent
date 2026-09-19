@@ -22,6 +22,7 @@ from hermes_state_backend import resolve_database_settings
 from hermes_state_common import SCHEMA_VERSION
 from hermes_state_postgres_schema import (
     ASYNC_DELEGATION_SCHEMA_SQL, CRON_SCHEMA_SQL, DELIVERY_SCHEMA_SQL, DISPLAY_SQL, FUNCTION_SQL, POSTGRES_SCHEMA_VERSION,
+    UPSTREAM_STORAGE_SCHEMA_SQL,
     POSTGRES_SCHEMA_SQL, SEARCH_SQL,
     TELEGRAM_SCHEMA_SQL,
 )
@@ -88,6 +89,7 @@ class PostgresSessionDB(SessionPostgresSearchMixin, SessionPostgresMaintenanceMi
     database_errors = (psycopg.Error,)
     database_operational_errors = (psycopg.OperationalError, psycopg.ProgrammingError)
     _unlimited_sql_limit = None
+    _messages_session_index_hint = ""
     # PostgreSQL TEXT cannot contain SQLite's NUL-prefixed multimodal marker.
     _CONTENT_JSON_PREFIX = "\x01json:"
     _CONTENT_BYTES_PREFIX = "\x01bytes:"
@@ -181,6 +183,10 @@ class PostgresSessionDB(SessionPostgresSearchMixin, SessionPostgresMaintenanceMi
                 if version == 3:
                     conn.execute(ASYNC_DELEGATION_SCHEMA_SQL)
                     version = 4
+                    conn.execute('UPDATE postgres_schema_version SET version = %s', (version,))
+                if version == 4:
+                    conn.execute(UPSTREAM_STORAGE_SCHEMA_SQL)
+                    version = 5
                     conn.execute('UPDATE postgres_schema_version SET version = %s', (version,))
                 if version != POSTGRES_SCHEMA_VERSION:
                     raise RuntimeError('Unsupported PostgreSQL schema version')
