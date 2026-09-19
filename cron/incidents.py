@@ -5,7 +5,8 @@ by ``(job_id, error signature)`` so the same job failing with the same error doe
 operator every run once acknowledged. Lifecycle: ``detected`` → ``alerted`` → ``closed``. The same
 job + same normalized error resolves to the SAME incident id, so a closed incident stays closed
 until the error text changes and mints a new one. ``alerted`` means a failure ping actually reached
-the operator. Incidents share ``cron/executions.db`` with ``cron.executions`` (one ledger file).
+the operator. Incidents share the execution store; SQLite keeps both tables in
+``cron/executions.db``.
 """
 
 from __future__ import annotations
@@ -90,7 +91,15 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def _transaction() -> Iterator[sqlite3.Connection]:
+def _transaction(*, write: bool = True) -> Iterator[sqlite3.Connection]:
+    from cron.database import postgres_transaction, uses_postgres
+
+    sqlite_override = _executions.EXECUTIONS_FILE or EXECUTIONS_FILE
+    if uses_postgres(sqlite_override=sqlite_override):
+        with postgres_transaction(store="executions", write=write) as conn:
+            yield conn
+        return
+
     from hermes_cli.sqlite_util import transaction
 
     with _lock, transaction(_connect()) as conn:
@@ -156,10 +165,16 @@ def upsert_incident(
     output_file = str(output_file) if output_file is not None else None
 
     with _transaction() as conn:
-        row = conn.execute(
-            "SELECT id FROM cron_incidents WHERE id=?", (incident_id,)
-        ).fetchone()
-        if row is not None:
+        inserted = conn.execute(
+            """INSERT INTO cron_incidents
+               (id, job_id, error_sig, state, failure_type,
+                first_seen_at, last_seen_at, error, output_file)
+               VALUES (?, ?, ?, 'detected', ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO NOTHING""",
+            (incident_id, job_id, sig, failure_type, now, now,
+             stored_error, output_file),
+        )
+        if inserted.rowcount == 0:
             conn.execute(
                 """UPDATE cron_incidents
                    SET last_seen_at=?, error=?, output_file=?
@@ -167,14 +182,6 @@ def upsert_incident(
                 (now, stored_error, output_file, incident_id),
             )
             return incident_id, False
-        conn.execute(
-            """INSERT INTO cron_incidents
-               (id, job_id, error_sig, state, failure_type,
-                first_seen_at, last_seen_at, error, output_file)
-               VALUES (?, ?, ?, 'detected', ?, ?, ?, ?, ?)""",
-            (incident_id, job_id, sig, failure_type, now, now,
-             stored_error, output_file),
-        )
         return incident_id, True
 
 
@@ -186,24 +193,20 @@ def set_incident_state(incident_id: str, state: str) -> bool:
         return False
     now = _hermes_now().isoformat()
     with _transaction() as conn:
-        row = conn.execute(
-            "SELECT state FROM cron_incidents WHERE id=?", (incident_id,)
-        ).fetchone()
-        if row is None or row["state"] in (state, "closed"):
-            return False
         if state == "closed":
-            conn.execute(
+            changed = conn.execute(
                 """UPDATE cron_incidents
                    SET state='closed', closed_at=?, acked_at=?
                    WHERE id=? AND state != 'closed'""",
                 (now, now, incident_id),
             )
         else:
-            conn.execute(
-                "UPDATE cron_incidents SET state=? WHERE id=?",
-                (state, incident_id),
+            changed = conn.execute(
+                """UPDATE cron_incidents SET state=?
+                   WHERE id=? AND state != ? AND state != 'closed'""",
+                (state, incident_id, state),
             )
-        return True
+        return changed.rowcount == 1
 
 
 def ack_incident(incident_id: str) -> bool:
@@ -220,7 +223,7 @@ def list_incidents(state: Optional[str] = None) -> List[Dict[str, Any]]:
     if state is not None and state not in INCIDENT_STATES:
         return []
     where, params = _state_filter(state)
-    with _transaction() as conn:
+    with _transaction(write=False) as conn:
         rows = conn.execute(
             "SELECT * FROM cron_incidents" + where + " ORDER BY last_seen_at DESC, id DESC", params
         ).fetchall()
@@ -228,7 +231,7 @@ def list_incidents(state: Optional[str] = None) -> List[Dict[str, Any]]:
 
 
 def get_incident(incident_id: str) -> Optional[Dict[str, Any]]:
-    with _transaction() as conn:
+    with _transaction(write=False) as conn:
         row = conn.execute(
             "SELECT * FROM cron_incidents WHERE id=?", (incident_id,)
         ).fetchone()
@@ -239,6 +242,6 @@ def count_incidents(state: Optional[str] = None) -> int:
     if state is not None and state not in INCIDENT_STATES:
         return 0
     where, params = _state_filter(state)
-    with _transaction() as conn:
+    with _transaction(write=False) as conn:
         row = conn.execute("SELECT COUNT(*) AS n FROM cron_incidents" + where, params).fetchone()
     return int(row["n"]) if row is not None else 0

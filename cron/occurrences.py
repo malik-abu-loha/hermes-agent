@@ -26,7 +26,7 @@ def completed_occurrence(job, instant):
     if instant is None:
         return False
     try:
-        with _transaction() as conn:
+        with _transaction(write=False) as conn:
             return conn.execute(
                 "SELECT 1 FROM executions WHERE job_id=? AND scheduled_instant=? "
                 "AND status='completed' LIMIT 1", (str(job['id']), instant)
